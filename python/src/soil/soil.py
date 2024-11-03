@@ -17,6 +17,7 @@ import joblib  # For caching models
 import os
 import seaborn as sns
 import warnings
+import re
 warnings.filterwarnings("ignore")
 
 # Set seed for reproducibility
@@ -66,6 +67,71 @@ def merge_datasets(df1, df2, df1_id=None, df2_id="Sample", new_id="sample"):
 
     return merged_data
 
+def preprocess_data(data):
+    # Remove columns that start with "Mean"
+    data = data.loc[:, ~data.columns.str.startswith("Mean")]
+    
+    # Add the 'obs' column as a repeating sequence from 1 to 5 (80 times)
+    data["obs"] = np.tile(range(1, 6), len(data) // 5)
+    
+    # Reorder the columns to place specified columns at the beginning
+    cols_to_relocate = ["sample", "obs" ,"TRT","Block","Irrigation","Inoculation","Resistance"]
+    data = data[cols_to_relocate + [col for col in data.columns if col not in cols_to_relocate]]
+    
+    # Filter out specific outliers identified in the EDA phase
+    data = data[~((data["sample"] == 55) & (data["obs"] == 1)) & ~((data["sample"] == 71) & (data["obs"] == 1))]
+    
+    # Reorder the levels of the 'irrig' column, if it's categorical, so "Half" comes before other levels
+    if data["Irrigation"].dtype.name == "category":
+        data["Irrigation"] = data["Irrigation"].cat.reorder_categories(["Half"] + [lvl for lvl in data["Irrigation"].cat.categories if lvl != "Half"])
+    
+    # Add an 'id' column as a unique identifier for each row
+    data = data.reset_index(drop=True)
+    data["id"] = data.index + 1  # +1 to start 'id' from 1
+
+    # 1. Create data subsets for classification and regression tasks
+    
+    # Classification subset: Select relevant columns for classification task
+    hs_irrig = data[["id", "sample", "obs", "Irrigation"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    
+    # Regression subsets: Select relevant columns for each regression target variable
+    hs_bact = data[["id", "sample", "obs", "Log16S"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    hs_cbblr = data[["id", "sample", "obs", "Logcbblr"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    hs_fungi = data[["id", "sample", "obs", "Log18S"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    hs_phoa = data[["id", "sample", "obs", "Logphoa"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    hs_urec = data[["id", "sample", "obs", "Ratiourec"] + [col for col in data.columns if re.match(r"^[0-9]+$", col)]].dropna()
+    
+    # 2. Split each subset into training and test sets with an 80/20 split
+    
+    # Classification split
+    X_irrig = hs_irrig.drop(columns="Irrigation")
+    y_irrig = hs_irrig["Irrigation"]
+    X_train_irrig, X_test_irrig, y_train_irrig, y_test_irrig = train_test_split(X_irrig, y_irrig, test_size=0.2, random_state=SEED)
+    
+    # Regression splits
+    X_bact = hs_bact.drop(columns="Log16S")
+    y_bact = hs_bact["Log16S"]
+    X_train_bact, X_test_bact, y_train_bact, y_test_bact = train_test_split(X_bact, y_bact, test_size=0.2, random_state=SEED)
+    
+    X_cbblr = hs_cbblr.drop(columns="Ratiocbblr")
+    y_cbblr = hs_cbblr["Ratiocbblr"]
+    X_train_cbblr, X_test_cbblr, y_train_cbblr, y_test_cbblr = train_test_split(X_cbblr, y_cbblr, test_size=0.2, random_state=SEED)
+    
+    X_fungi = hs_fungi.drop(columns="Ratiofungi")
+    y_fungi = hs_fungi["Ratiofungi"]
+    X_train_fungi, X_test_fungi, y_train_fungi, y_test_fungi = train_test_split(X_fungi, y_fungi, test_size=0.2, random_state=SEED)
+    
+    X_phoa = hs_phoa.drop(columns="Logphoa")
+    y_phoa = hs_phoa["Logphoa"]
+    X_train_phoa, X_test_phoa, y_train_phoa, y_test_phoa = train_test_split(X_phoa, y_phoa, test_size=0.2, random_state=SEED)
+    
+    X_urec = hs_urec.drop(columns="Logurec")
+    y_urec = hs_urec["Logurec"]
+    X_train_urec, X_test_urec, y_train_urec, y_test_urec = train_test_split(X_urec, y_urec, test_size=0.2, random_state=SEED)
+
+    return data
+
+
 
 
 # Load data (replace with appropriate path on your environment)
@@ -75,16 +141,14 @@ stress_pca_psr = pd.read_csv(f"{data_dir}/RKNGHStressPCAPSR.csv")
 
 data = merge_datasets(stress_pca_psr, stress)
 
+# commented this out because the columns are already renamed in our current data
 # Clean and rename columns for consistency and readability.
-data.rename(columns={
-    "TRT": "trt_code", "Block": "block", "Irrigation": "irrig", "Inoculation": "inoc",
-    # ... additional renaming following your R code convention ...
-}, inplace=True)
+#data.rename(columns={
+#    "TRT": "trt_code", "Block": "block", "Irrigation": "irrig", "Inoculation": "inoc",
+#    # ... additional renaming following your R code convention ...
+#}, inplace=True)
 
-# Add derived columns and filter outliers
-data["obs"] = np.tile(range(1, 6), len(data) // 5)
-data = data[(data["sample"] != 55) | (data["obs"] != 1)]
-data = data[(data["sample"] != 71) | (data["obs"] != 1)]
+data = preprocess_data(data)
 
 # -----
 # HELPER FUNCTIONS
@@ -127,13 +191,13 @@ def tune_fit(model_type, mode, scoring, data_split, formula, corr_thresh=None, v
     elif model_type == "elast":
         model = ElasticNet()
         param_grid = {"alpha": np.logspace(-4, 0, 10), "l1_ratio": [0.1, 0.5, 0.9]}
-    elif model_type == "Random forest":
-        if mode == "classification":
-            model = RandomForestClassifier()
-            param_grid = {"n_estimators": [100, 200], "max_features": ["sqrt", "log2"]}
-        else:
-            model = RandomForestRegressor()
-            param_grid = {"n_estimators": [100, 200], "max_features": ["sqrt", "log2"]}
+#    elif model_type == "Random forest":
+#        if mode == "classification":
+#            model = RandomForestClassifier()
+#            param_grid = {"n_estimators": [100, 200], "max_features": ["sqrt", "log2"]}
+#        else:
+#            model = RandomForestRegressor()
+#            param_grid = {"n_estimators": [100, 200], "max_features": ["sqrt", "log2"]}
     else:
         raise ValueError("Unknown model type")
 
@@ -163,7 +227,7 @@ y = data["irrig"]               # Target variable
 lasso_model, lasso_params = tune_fit("lasso", "classification", make_scorer(f1_score), X, y, verbose=True)
 
 # Random Forest (Classification)
-rf_model, rf_params = tune_fit("Random forest", "classification", make_scorer(roc_auc_score), X, y, verbose=True)
+#rf_model, rf_params = tune_fit("Random forest", "classification", make_scorer(roc_auc_score), X, y, verbose=True)
 
 
 # Plotting ROC Curve for Classification Models
