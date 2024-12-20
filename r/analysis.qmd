@@ -766,6 +766,23 @@ results_no_wv |>
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+Comparing RMSE to MAE. If one gene's models have a much higher difference in RMSE vs. MAE, that might imply outliers for that specific set of gene levels.
+
+```{r}
+results |> 
+  select(-Waveband, -Coefficient) |> 
+  unique() |> 
+  mutate(
+    diff = RMSE - MAE
+  ) |> 
+  ggplot() +
+  geom_point(aes(x = Method, y = diff, shape = Region)) +
+  facet_wrap(~ Gene) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+No, they look fairly consistent among genes. Most of the variation has to do with exceptionally poor models like 16S's cluster and PI on vis only.
+
 ### Consensus choices
 
 #### Visible
@@ -1365,6 +1382,7 @@ All, inside visible light (a little over):
 -   510-560 (cbbLR, 16S, phoA, 18S, ureC)
 
 -   700-720 (phoA, 16S)
+
 
 
 
